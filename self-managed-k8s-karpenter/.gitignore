@@ -1,0 +1,55 @@
+# Ignore Terraform state files and backups
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+
+# Ignore Terragrunt cache and generated files
+.terragrunt-cache/
+
+# Ignore Ansible logs and cache
+*.retry
+__pycache__/
+*.log
+
+# Ignore Helm temporary files
+helm-apps/**/charts/
+helm-apps/**/tmpcharts/
+helm-apps/**/.helmignore
+
+# Ignore Kubernetes secrets and configuration files
+kubeconfig
+.kube/
+secrets.yaml
+*.kubeconfig
+
+# Ignore logs and temp files
+*.log
+*.out
+*.err
+*.swp
+.DS_Store
+
+# Ignore Python virtual environments
+venv/
+.env/
+
+# Ignore Node.js dependencies (for frontend/backend apps)
+node_modules/
+npm-debug.log
+
+# Ignore AWS CLI credentials (for security)
+.aws/
+credentials
+config
+
+# Ignore Jenkins workspace and build files
+jenkins_home/
+jenkins.log
+workspace/
+
+# Ignore monitoring tool logs
+grafana.db
+prometheus/
+alertmanager/
