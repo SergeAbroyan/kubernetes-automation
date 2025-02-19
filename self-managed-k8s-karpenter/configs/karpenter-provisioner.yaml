@@ -21,4 +21,3 @@ spec:
     resources:
       cpu: "100"
       memory: "200Gi"
-s

@@ -21,7 +21,7 @@ resource "null_resource" "setup_k8s_control_plane" {
     type        = "ssh"
     user        = "ubuntu"
     private_key = file(var.ssh_private_key_path)
-    host        = aws_instance.control_plane.public_ip
+    host        = var.control_plane_id
   }
 
   provisioner "remote-exec" {
@@ -47,7 +47,7 @@ resource "null_resource" "install_calico" {
     type        = "ssh"
     user        = "ubuntu"
     private_key = file(var.ssh_private_key_path)
-    host        = aws_instance.control_plane.public_ip
+    host        = var.control_plane_id
   }
 
   provisioner "remote-exec" {
@@ -59,14 +59,14 @@ resource "null_resource" "install_calico" {
 
 # 🚀 Join Worker Nodes to the Cluster
 resource "null_resource" "join_worker_nodes" {
-  count      = var.worker_node_count
+  count      = length(var.worker_node_ips)  # ✅ Use worker_node_ips from EC2
   depends_on = [null_resource.setup_k8s_control_plane]
 
   connection {
     type        = "ssh"
     user        = "ubuntu"
     private_key = file(var.ssh_private_key_path)
-    host        = aws_instance.worker_nodes[count.index].public_ip
+    host        = var.worker_node_ips[count.index]  # ✅ Use input variable
   }
 
   provisioner "remote-exec" {
@@ -76,7 +76,7 @@ resource "null_resource" "join_worker_nodes" {
       "echo 'deb https://apt.kubernetes.io/ kubernetes-xenial main' | sudo tee /etc/apt/sources.list.d/kubernetes.list",
       "sudo apt-get update",
       "sudo apt-get install -y kubelet kubeadm kubectl",
-      "sudo kubeadm join $(aws_instance.control_plane.private_ip):6443 --token $(kubeadm token create --print-join-command | awk '{print $2}') --discovery-token-ca-cert-hash sha256:$(openssl x509 -pubkey -in /etc/kubernetes/pki/ca.crt | openssl rsa -pubin -outform der | openssl dgst -sha256 -hex | awk '{print $2}')"
+      "sudo kubeadm join ${var.control_plane_ip}:6443 --token $(kubeadm token create --print-join-command | awk '{print $2}') --discovery-token-ca-cert-hash sha256:$(openssl x509 -pubkey -in /etc/kubernetes/pki/ca.crt | openssl rsa -pubin -outform der | openssl dgst -sha256 -hex | awk '{print $2}')"
     ]
   }
 }

@@ -7,5 +7,5 @@ output "kubeconfig" {
 
 output "control_plane_ip" {
   description = "Public IP of the control plane node"
-  value       = aws_instance.control_plane.public_ip
+  value       = var.control_plane_ip
 }

@@ -47,5 +47,8 @@ resource "helm_release" "karpenter" {
 
 # 🚀 Apply Karpenter Provisioner
 resource "kubernetes_manifest" "karpenter_provisioner" {
-  manifest = yamldecode(file("${path.module}/karpenter-provisioner.yaml"))
+  manifest = yamldecode(file("/Users/serge/Documents/GitHub/kubernetes-automation/self-managed-k8s-karpenter/configs/karpenter-provisioner.yaml"))
 }
+
+
+

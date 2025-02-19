@@ -24,3 +24,13 @@ variable "ssh_private_key_path" {
   description = "Path to the SSH private key"
   type        = string
 }
+
+variable "worker_node_ips" {
+  description = "List of worker node public IPs"
+  type        = list(string)
+}
+
+variable "control_plane_ip" {
+  description = "Public IP of the control plane instance"
+  type        = string
+}
