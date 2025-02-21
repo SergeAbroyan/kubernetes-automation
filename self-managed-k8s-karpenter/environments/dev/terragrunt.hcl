@@ -15,8 +15,6 @@ dependencies {
     "./key-pair",
     "./iam",
     "./ec2",
-    "./kubernetes",
-    "./karpenter",
     "./load-balancer"
   ]
 }

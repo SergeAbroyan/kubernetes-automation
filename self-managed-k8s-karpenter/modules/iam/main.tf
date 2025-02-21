@@ -53,6 +53,20 @@ resource "aws_iam_role" "k8s_worker_nodes" {
   }
 }
 
+
+# 🚀 Create IAM Instance Profile for Control Plane
+resource "aws_iam_instance_profile" "k8s_control_plane" {
+  name = "k8s-control-plane-instance-profile"
+  role = aws_iam_role.k8s_control_plane.name
+}
+
+# 🚀 Create IAM Instance Profile for Worker Nodes
+resource "aws_iam_instance_profile" "k8s_worker_nodes" {
+  name = "k8s-worker-nodes-instance-profile"
+  role = aws_iam_role.k8s_worker_nodes.name
+}
+
+
 # 🚀 Attach AWS Managed Policies to Worker Node Role
 resource "aws_iam_role_policy_attachment" "worker_node_policy_eks" {
   role       = aws_iam_role.k8s_worker_nodes.name
@@ -104,3 +118,4 @@ resource "aws_iam_role_policy_attachment" "karpenter_policy_ssm" {
   role       = aws_iam_role.karpenter.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
+
