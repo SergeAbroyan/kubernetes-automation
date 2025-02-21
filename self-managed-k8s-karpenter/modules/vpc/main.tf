@@ -1,4 +1,3 @@
-# main.tf - Defines the custom VPC module
 terraform {
   required_providers {
     aws = {
@@ -12,7 +11,6 @@ provider "aws" {
   region = var.aws_region
 }
 
-# 🚀 Create VPC
 resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr
   enable_dns_support   = true
@@ -23,7 +21,6 @@ resource "aws_vpc" "main" {
   }
 }
 
-# 🚀 Create Public Subnets
 resource "aws_subnet" "public" {
   count = length(var.public_subnet_cidrs)
 
@@ -37,7 +34,6 @@ resource "aws_subnet" "public" {
   }
 }
 
-# 🚀 Create Private Subnets
 resource "aws_subnet" "private" {
   count = length(var.private_subnet_cidrs)
 
@@ -50,7 +46,6 @@ resource "aws_subnet" "private" {
   }
 }
 
-# 🚀 Create Internet Gateway for Public Subnets
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.main.id
 
@@ -59,7 +54,6 @@ resource "aws_internet_gateway" "igw" {
   }
 }
 
-# 🚀 Create Public Route Table
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
 
@@ -68,21 +62,18 @@ resource "aws_route_table" "public" {
   }
 }
 
-# 🚀 Associate Public Subnets with Public Route Table
 resource "aws_route_table_association" "public" {
   count          = length(var.public_subnet_cidrs)
   subnet_id      = aws_subnet.public[count.index].id
   route_table_id = aws_route_table.public.id
 }
 
-# 🚀 Add Default Route in Public Route Table (Internet Access)
 resource "aws_route" "public_internet_access" {
   route_table_id         = aws_route_table.public.id
   destination_cidr_block = "0.0.0.0/0"
   gateway_id             = aws_internet_gateway.igw.id
 }
 
-# 🚀 Create NAT Gateway for Private Subnets
 resource "aws_eip" "nat" {
   count = length(var.private_subnet_cidrs)
 }
@@ -98,7 +89,6 @@ resource "aws_nat_gateway" "nat" {
   }
 }
 
-# 🚀 Create Private Route Tables
 resource "aws_route_table" "private" {
   count  = length(var.private_subnet_cidrs)
   vpc_id = aws_vpc.main.id
@@ -108,14 +98,12 @@ resource "aws_route_table" "private" {
   }
 }
 
-# 🚀 Associate Private Subnets with Private Route Tables
 resource "aws_route_table_association" "private" {
   count          = length(var.private_subnet_cidrs)
   subnet_id      = aws_subnet.private[count.index].id
   route_table_id = aws_route_table.private[count.index].id
 }
 
-# 🚀 Add Default Route in Private Route Table (via NAT Gateway)
 resource "aws_route" "private_nat_gateway" {
   count = length(var.private_subnet_cidrs)
 

@@ -1,4 +1,3 @@
-# main.tf - Deploys an AWS Load Balancer for Kubernetes services
 
 terraform {
   required_providers {
@@ -13,7 +12,6 @@ provider "aws" {
   region = var.aws_region
 }
 
-# 🚀 Create an Application Load Balancer (ALB)
 resource "aws_lb" "k8s_alb" {
   name               = "k8s-alb"
   internal           = false
@@ -28,7 +26,6 @@ resource "aws_lb" "k8s_alb" {
   }
 }
 
-# 🚀 Create an ALB Target Group
 resource "aws_lb_target_group" "k8s_tg" {
   name     = "k8s-target-group"
   port     = var.service_port
@@ -48,7 +45,6 @@ resource "aws_lb_target_group" "k8s_tg" {
   }
 }
 
-# 🚀 Attach Worker Nodes to Target Group
 resource "aws_lb_target_group_attachment" "k8s_worker_nodes" {
   count            = length(var.worker_node_ids)
   target_group_arn = aws_lb_target_group.k8s_tg.arn
@@ -56,7 +52,6 @@ resource "aws_lb_target_group_attachment" "k8s_worker_nodes" {
   port             = var.service_port
 }
 
-# 🚀 Create an ALB Listener
 resource "aws_lb_listener" "k8s_listener" {
   load_balancer_arn = aws_lb.k8s_alb.arn
   port              = 80
