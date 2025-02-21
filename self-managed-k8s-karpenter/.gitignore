@@ -43,7 +43,8 @@ npm-debug.log
 .aws/
 credentials
 config
-
+awsid_rsa
+awsid_rsa.pub
 # Ignore Jenkins workspace and build files
 jenkins_home/
 jenkins.log
