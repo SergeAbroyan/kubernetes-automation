@@ -54,3 +54,8 @@ variable "worker_node_iam_role" {
   description = "IAM role for worker nodes"
   type        = string
 }
+
+variable "project_root" {
+  description = "Path to the root of the project"
+  type        = string
+}

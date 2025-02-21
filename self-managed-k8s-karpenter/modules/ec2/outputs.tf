@@ -15,5 +15,5 @@ output "worker_node_ids" {
 
 output "worker_node_ips" {
   description = "Public IPs of the worker nodes"
-  value       = aws_instance.worker_nodes[*].public_ip
+  value       = aws_instance.worker_nodes[*].private_ip
 }

@@ -41,6 +41,10 @@ dependency "iam" {
   }
 }
 
+locals {
+  project_root = get_env("TERRAGRUNT_WORKING_DIR", get_repo_root())
+}
+
 inputs = {
   aws_region                  = "us-east-1"
   ami_id                      = "ami-04681163a08179f28" # Change this to the correct Kubernetes AMI
@@ -53,4 +57,5 @@ inputs = {
   security_group_id           = dependency.security-groups.outputs.k8s_nodes_sg
   control_plane_iam_role      = dependency.iam.outputs.control_plane_instance_profile  # ✅ FIXED REFERENCE
   worker_node_iam_role        = dependency.iam.outputs.worker_nodes_instance_profile   # ✅ FIXED REFERENCE
+  project_root                = local.project_root  
 }

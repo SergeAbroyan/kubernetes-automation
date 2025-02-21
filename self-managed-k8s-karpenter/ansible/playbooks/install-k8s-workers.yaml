@@ -1,0 +1,64 @@
+---
+- name: Install Kubernetes and Join Worker Nodes to Cluster
+  hosts: workers
+  become: yes
+  tasks:
+
+    ### 1. Install and Enable Docker ###
+    - name: Install Docker
+      yum:
+        name: docker
+        state: present
+
+    - name: Enable and Start Docker
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+
+    ### 2. Add Kubernetes Repo and Install Kubernetes ###
+    - name: Add Kubernetes YUM Repository
+      copy:
+        dest: /etc/yum.repos.d/kubernetes.repo
+        content: |
+          [kubernetes]
+          name=Kubernetes
+          baseurl=https://pkgs.k8s.io/core:/stable:/v1.29/rpm/
+          enabled=1
+          gpgcheck=1
+          repo_gpgcheck=1
+          gpgkey=https://pkgs.k8s.io/core:/stable:/v1.29/rpm/repodata/repomd.xml.key
+
+    - name: Install Kubernetes Packages
+      yum:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+
+    - name: Enable and Start Kubelet
+      systemd:
+        name: kubelet
+        enabled: yes
+        state: started
+
+    ### 3. Fetch and Distribute Join Command ###
+    - name: Fetch Join Command from Master
+      fetch:
+        src: /var/lib/kubeadm_join.sh
+        dest: /tmp/kubeadm_join.sh
+        flat: yes
+      delegate_to: "{{ groups['master'][0] }}"
+
+    - name: Copy Join Command to Worker Nodes
+      copy:
+        src: /tmp/kubeadm_join.sh
+        dest: /var/lib/kubeadm_join.sh
+        mode: '0755'
+
+    ### 4. Join Worker Nodes to the Cluster ###
+    - name: Join Worker Node to Kubernetes Cluster
+      command: bash /var/lib/kubeadm_join.sh
+      args:
+        creates: /etc/kubernetes/kubelet.conf

@@ -1,0 +1,141 @@
+---
+- name: Install and Configure Kubernetes Control Plane
+  hosts: master
+  become: yes
+  tasks:
+
+    ### 1. Install Required Packages ###
+    - name: Enable Docker on Amazon Linux 2
+      command: amazon-linux-extras enable docker
+
+    - name: Install Docker
+      yum:
+        name: docker
+        state: present
+
+    - name: Start and Enable Docker Service
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Add Kubernetes YUM Repository
+      copy:
+        dest: /etc/yum.repos.d/kubernetes.repo
+        content: |
+          [kubernetes]
+          name=Kubernetes
+          baseurl=https://pkgs.k8s.io/core:/stable:/v1.29/rpm/
+          enabled=1
+          gpgcheck=1
+          repo_gpgcheck=1
+          gpgkey=https://pkgs.k8s.io/core:/stable:/v1.29/rpm/repodata/repomd.xml.key
+
+    - name: Install Kubernetes Packages (kubeadm, kubelet, kubectl)
+      yum:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+
+    - name: Enable and Start Kubelet Service
+      systemd:
+        name: kubelet
+        enabled: yes
+        state: started
+
+    ### 2. Initialize Kubernetes Control Plane ###
+    - name: Initialize Kubernetes Control Plane
+      command: kubeadm init --pod-network-cidr=192.168.0.0/16
+      args:
+        creates: /etc/kubernetes/admin.conf
+
+    - name: Configure kubectl for ec2-user
+      block:
+        - name: Create .kube directory
+          file:
+            path: /home/ec2-user/.kube
+            state: directory
+            owner: ec2-user
+            group: ec2-user
+            mode: '0755'
+
+        - name: Copy admin.conf to user kubeconfig
+          copy:
+            src: /etc/kubernetes/admin.conf
+            dest: /home/ec2-user/.kube/config
+            remote_src: yes
+            owner: ec2-user
+            group: ec2-user
+            mode: '0644'
+
+    - name: Set KUBECONFIG environment variable for ec2-user
+      lineinfile:
+        path: /home/ec2-user/.bashrc
+        line: "export KUBECONFIG=/home/ec2-user/.kube/config"
+        create: yes
+
+    ### 3. Install Calico Network Plugin ###
+    - name: Install Calico Network Plugin
+      command: kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+
+    ### 4. Generate and Save Worker Node Join Command ###
+    - name: Generate Worker Node Join Command
+      command: kubeadm token create --print-join-command
+      register: kubeadm_join_command
+
+    - name: Save Join Command to File
+      copy:
+        content: "{{ kubeadm_join_command.stdout }}"
+        dest: /var/lib/kubeadm_join.sh
+        mode: '0644'
+
+    ### 5. Install Helm and Karpenter ###
+    - name: Install Git (Required for Helm)
+      yum:
+        name: git
+        state: present
+
+    - name: Install Helm
+      shell: |
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+        mv /usr/local/bin/helm /usr/bin/helm
+      args:
+        creates: /usr/bin/helm
+
+    - name: Ensure Helm is available in PATH
+      lineinfile:
+        path: /etc/profile
+        line: "export PATH=$PATH:/usr/bin"
+        create: yes
+
+    - name: Reload Shell Profile
+      shell: source /etc/profile
+
+    - name: Verify Helm Installation
+      command: helm version
+      register: helm_version
+      ignore_errors: yes
+
+    - name: Print Helm Version
+      debug:
+        msg: "{{ helm_version.stdout }}"
+
+    - name: Add Helm Karpenter Repo
+      command: helm repo add karpenter https://charts.karpenter.sh
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+
+    - name: Update Helm Repositories
+      command: helm repo update
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+
+    - name: Install Karpenter
+      command: helm install karpenter karpenter/karpenter --namespace kube-system
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+

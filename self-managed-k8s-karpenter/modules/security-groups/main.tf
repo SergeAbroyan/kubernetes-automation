@@ -33,13 +33,33 @@ resource "aws_security_group" "k8s_nodes" {
     cidr_blocks = ["0.0.0.0/0"] 
   }
 
-  ingress {
-    description = "Allow all node-to-node communication"
-    from_port   = 0
-    to_port     = 65535
-    protocol    = "tcp"
-    self        = true
-  }
+ # Allow Node-to-Node Kubernetes Traffic
+ingress {
+  description = "Allow Kubernetes NodePort Range"
+  from_port   = 30000
+  to_port     = 32767
+  protocol    = "tcp"
+  self        = true
+}
+
+# Allow Cluster Networking
+ingress {
+  description = "Allow Kubernetes Internal Services"
+  from_port   = 10250
+  to_port     = 10255
+  protocol    = "tcp"
+  self        = true
+}
+
+# Allow Calico / Flannel CNI
+ingress {
+  description = "Allow VXLAN / BGP for CNI (Calico, Flannel)"
+  from_port   = 4789
+  to_port     = 4789
+  protocol    = "udp"
+  self        = true
+}
+
 
   egress {
     description = "Allow all outbound traffic"

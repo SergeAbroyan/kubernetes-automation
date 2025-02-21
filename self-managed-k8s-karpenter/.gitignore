@@ -54,3 +54,4 @@ workspace/
 grafana.db
 prometheus/
 alertmanager/
+inventory.ini
