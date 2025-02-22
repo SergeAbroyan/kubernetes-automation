@@ -10,6 +10,11 @@
         line: "export KUBECONFIG=/home/ec2-user/.kube/config"
         create: yes
 
+    - name: Source KUBECONFIG in current shell
+      shell: source /home/ec2-user/.bashrc
+      args:
+        executable: /bin/bash
+
     - name: Create Karpenter directory
       file:
         path: /home/ec2-user/self-managed-k8s-karpenter/karpenter
@@ -18,6 +23,37 @@
         group: ec2-user
         mode: '0755'
 
+    ### ✅ 1. Install Karpenter CRDs (VERY IMPORTANT) ###
+    - name: Apply Karpenter CRDs
+      shell: |
+        kubectl apply -f https://raw.githubusercontent.com/aws/karpenter/main/pkg/apis/crds/karpenter.sh_provisioners.yaml
+        kubectl apply -f https://raw.githubusercontent.com/aws/karpenter/main/pkg/apis/crds/karpenter.k8s.aws_awsnodetemplates.yaml
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+
+    ### ✅ 2. Install Karpenter Helm Chart ###
+    - name: Add Karpenter Helm repo
+      command: helm repo add karpenter https://charts.karpenter.sh
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+
+    - name: Update Helm Repositories
+      command: helm repo update
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+
+    - name: Install Karpenter using Helm
+      command: >
+        helm upgrade --install karpenter karpenter/karpenter
+        --namespace kube-system
+        --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="arn:aws:iam::<ACCOUNT_ID>:role/KarpenterRole"
+        --set controller.clusterName="self-managed-k8s"
+        --set defaultProvisioner.create=false
+        --wait
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+
+    ### ✅ 3. Write NodeTemplate (Fix missing CRD issue) ###
     - name: Write NodeTemplate YAML to Master Node
       copy:
         content: |
@@ -37,6 +73,7 @@
         group: ec2-user
         mode: '0644'
 
+    ### ✅ 4. Write Provisioner YAML (Ensure Karpenter can schedule properly) ###
     - name: Write Provisioner YAML to Master Node
       copy:
         content: |
@@ -57,7 +94,14 @@
             consolidation:
               enabled: true
             ttlSecondsAfterEmpty: 30
+            nodeSelector:
+              kubernetes.io/role: worker
+            tolerations:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
+                effect: NoSchedule
         dest: /home/ec2-user/self-managed-k8s-karpenter/karpenter/provisioner.yaml
         owner: ec2-user
         group: ec2-user
         mode: '0644'
+
