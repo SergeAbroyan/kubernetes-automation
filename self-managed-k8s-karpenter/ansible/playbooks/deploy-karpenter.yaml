@@ -4,6 +4,7 @@
   become: yes
   tasks:
 
+    ### ✅ 1. Ensure KUBECONFIG is Set ###
     - name: Ensure KUBECONFIG is set for ec2-user
       lineinfile:
         path: /home/ec2-user/.bashrc
@@ -15,6 +16,7 @@
       args:
         executable: /bin/bash
 
+    ### ✅ 2. Create Karpenter Directory ###
     - name: Create Karpenter directory
       file:
         path: /home/ec2-user/self-managed-k8s-karpenter/karpenter
@@ -23,17 +25,9 @@
         group: ec2-user
         mode: '0755'
 
-    ### ✅ 1. Install Karpenter CRDs (VERY IMPORTANT) ###
-    - name: Apply Karpenter CRDs
-      shell: |
-        kubectl apply -f https://raw.githubusercontent.com/aws/karpenter/main/pkg/apis/crds/karpenter.sh_provisioners.yaml
-        kubectl apply -f https://raw.githubusercontent.com/aws/karpenter/main/pkg/apis/crds/karpenter.k8s.aws_awsnodetemplates.yaml
-      environment:
-        KUBECONFIG: /home/ec2-user/.kube/config
-
-    ### ✅ 2. Install Karpenter Helm Chart ###
+    ### ✅ 3. Add & Update Helm Repositories ###
     - name: Add Karpenter Helm repo
-      command: helm repo add karpenter https://charts.karpenter.sh
+      shell: helm repo list | grep -q "karpenter" || helm repo add karpenter https://charts.karpenter.sh
       environment:
         KUBECONFIG: /home/ec2-user/.kube/config
 
@@ -42,18 +36,48 @@
       environment:
         KUBECONFIG: /home/ec2-user/.kube/config
 
+    ### ✅ 4. Ensure Karpenter Namespace Exists ###
+    - name: Create karpenter namespace
+      shell: kubectl create namespace karpenter --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+
+    ### ✅ 5. Install Karpenter Using Helm ###
     - name: Install Karpenter using Helm
       command: >
         helm upgrade --install karpenter karpenter/karpenter
-        --namespace kube-system
-        --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="arn:aws:iam::<ACCOUNT_ID>:role/KarpenterRole"
+        --namespace karpenter
+        --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="arn:aws:iam::{{ lookup('env', 'AWS_ACCOUNT_ID') }}:role/KarpenterRole"
         --set controller.clusterName="self-managed-k8s"
         --set defaultProvisioner.create=false
         --wait
       environment:
         KUBECONFIG: /home/ec2-user/.kube/config
 
-    ### ✅ 3. Write NodeTemplate (Fix missing CRD issue) ###
+    ### ✅ 6. Ensure Karpenter CRDs Are Installed ###
+    - name: Check if Karpenter CRDs are installed
+      shell: kubectl get crds | grep 'karpenter'
+      register: karpenter_crd_check
+      ignore_errors: true
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+
+    - name: Apply Karpenter CRDs (if missing)
+      shell: |
+        kubectl apply -f https://raw.githubusercontent.com/aws/karpenter/main/pkg/apis/crds/karpenter.sh_provisioners.yaml
+        kubectl apply -f https://raw.githubusercontent.com/aws/karpenter/main/pkg/apis/crds/karpenter.k8s.aws_awsnodetemplates.yaml
+      when: karpenter_crd_check.rc != 0
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+
+    ### ✅ 7. Wait for Karpenter Pods to be Ready ###
+    - name: Wait for Karpenter pods to be ready
+      shell: kubectl wait --namespace karpenter --for=condition=Ready pods --all --timeout=180s
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+      ignore_errors: true
+
+    ### ✅ 8. Create NodeTemplate ###
     - name: Write NodeTemplate YAML to Master Node
       copy:
         content: |
@@ -73,7 +97,12 @@
         group: ec2-user
         mode: '0644'
 
-    ### ✅ 4. Write Provisioner YAML (Ensure Karpenter can schedule properly) ###
+    - name: Apply Karpenter NodeTemplate
+      command: kubectl apply -f /home/ec2-user/self-managed-k8s-karpenter/karpenter/nodetemplate.yaml
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+
+    ### ✅ 9. Create Provisioner ###
     - name: Write Provisioner YAML to Master Node
       copy:
         content: |
@@ -105,3 +134,7 @@
         group: ec2-user
         mode: '0644'
 
+    - name: Apply Karpenter Provisioner
+      command: kubectl apply -f /home/ec2-user/self-managed-k8s-karpenter/karpenter/provisioner.yaml
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config

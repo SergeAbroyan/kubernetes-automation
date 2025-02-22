@@ -11,7 +11,7 @@ provider "aws" {
   region = var.aws_region
 }
 
-### 🚀 EC2 INSTANCES: Control Plane & Worker Nodes ###
+### 🚀 Create EC2 Instances: Control Plane & Worker Nodes ###
 resource "aws_instance" "control_plane" {
   ami                    = var.ami_id
   instance_type          = var.control_plane_instance_type
@@ -60,8 +60,6 @@ resource "null_resource" "generate_ansible_inventory" {
   depends_on = [aws_instance.control_plane, aws_instance.worker_nodes]
 }
 
-### 🚀 Copy SSH Key & Wait for Control Plane ###
-### 🚀 Copy SSH Private Key to Bastion (Control Plane) ###
 resource "null_resource" "setup_bastion" {
   depends_on = [aws_instance.control_plane]
 
@@ -74,6 +72,16 @@ resource "null_resource" "setup_bastion" {
     }
 
     inline = [
+      "echo '⏳ Waiting for SSH on Control Plane...'",
+
+      # ✅ Loop until SSH is available
+      "until ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes -i /home/ec2-user/.ssh/awsid_rsa ec2-user@${aws_instance.control_plane.public_ip} exit; do",
+      "  echo '⏳ Waiting for SSH to be available on Control Plane...'",
+      "  sleep 5",
+      "done",
+      "echo '✅ Control Plane SSH is Ready!'",
+
+      # ✅ Copy SSH Key to Bastion
       "echo '🔑 Copying SSH private key to Bastion (Control Plane)...'",
       "mkdir -p /home/ec2-user/.ssh",
       "echo '${file("${var.project_root}/self-managed-k8s-karpenter/awsid_rsa")}' > /home/ec2-user/.ssh/awsid_rsa",
@@ -85,54 +93,74 @@ resource "null_resource" "setup_bastion" {
 }
 
 
+### 🚀 Install Kubernetes on the Master Node ###
+resource "null_resource" "ansible_install_k8s_master" {
+  provisioner "local-exec" {
+    command = <<EOT
+    echo "⏳ Running Ansible: Installing Kubernetes on Master Node..."
+    
+    ansible-playbook -i ${var.project_root}/self-managed-k8s-karpenter/ansible/inventory.ini -u ec2-user \
+      --private-key ${var.project_root}/self-managed-k8s-karpenter/awsid_rsa \
+      ${var.project_root}/self-managed-k8s-karpenter/ansible/playbooks/install-k8s-master.yaml
+    EOT
+  }
 
-### 🚀 Wait for Worker Nodes to be Ready ###
-### 🚀 Wait for Worker Nodes to be Ready via Bastion ###
-### 🚀 Wait for Worker Nodes to be Ready ###
-resource "null_resource" "wait_for_worker_ssh" {
-  depends_on = [null_resource.setup_bastion]
+  depends_on = [
+    null_resource.generate_ansible_inventory,
+    null_resource.setup_bastion
+  ]
+}
+
+resource "null_resource" "ansible_install_k8s_worker" {
+  provisioner "local-exec" {
+    command = <<EOT
+    echo "⏳ Running Ansible: Installing Kubernetes on Worker Nodes..."
+    
+    ansible-playbook -i ${var.project_root}/self-managed-k8s-karpenter/ansible/inventory.ini \
+      -u ec2-user \
+      --private-key /Users/serge/Documents/GitHub/kubernetes-automation/self-managed-k8s-karpenter/awsid_rsa \
+      --ssh-extra-args "-o ProxyCommand=\"ssh -i /Users/serge/Documents/GitHub/kubernetes-automation/self-managed-k8s-karpenter/awsid_rsa -W %h:%p -q ec2-user@${aws_instance.control_plane.public_ip}\"" \
+      ${var.project_root}/self-managed-k8s-karpenter/ansible/playbooks/install-k8s-workers.yaml
+    EOT
+  }
+
+  depends_on = [
+    null_resource.ansible_install_k8s_master  # ✅ Ensure Master is installed first
+  ]
+}
+
+
+
+
+### 🚀 Ensure Kubernetes Cluster is Fully Ready ###
+resource "null_resource" "wait_for_cluster_ready" {
+  depends_on = [null_resource.ansible_install_k8s_worker]
 
   provisioner "remote-exec" {
     connection {
       type        = "ssh"
       user        = "ec2-user"
-      private_key = file("${var.project_root}/self-managed-k8s-karpenter/awsid_rsa") # ✅ LOCAL PRIVATE KEY
+      private_key = file("${var.project_root}/self-managed-k8s-karpenter/awsid_rsa")
       host        = aws_instance.control_plane.public_ip
     }
 
     inline = [
-      "echo '⏳ Waiting for SSH to be available on Worker Nodes...'",
-      "for ip in ${join(" ", aws_instance.worker_nodes[*].private_ip)}; do",
-      "  echo \"Checking SSH on worker $ip via bastion...\"",
-      "  while ! ssh -i /home/ec2-user/.ssh/awsid_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ProxyCommand='ssh -i /home/ec2-user/.ssh/awsid_rsa -W %h:%p -q ec2-user@${aws_instance.control_plane.public_ip}' ec2-user@$ip exit; do",
-      "    sleep 5",
-      "  done",
-      "  echo \"✅ SSH is ready on worker $ip\"",
-      "done"
+      "echo '🔄 Waiting for Kubernetes Cluster to be Fully Ready...'",
+      "until kubectl get nodes --kubeconfig /home/ec2-user/.kube/config | grep 'Ready'; do",
+      "  echo '⏳ Waiting for all nodes to be Ready...'",
+      "  sleep 10",
+      "done",
+      "echo '✅ Kubernetes Cluster is Fully Ready!'"
     ]
   }
 }
 
-
-### 🚀 Run Ansible & Deploy Karpenter ###
-resource "null_resource" "ansible_provisioning" {
+### 🚀 Deploy Karpenter ###
+resource "null_resource" "ansible_deploy_karpenter" {
   provisioner "local-exec" {
     command = <<EOT
-    echo "⏳ Running Ansible Playbooks..."
+    echo "⏳ Running Ansible: Deploying Karpenter..."
     
-    # 🏗️ Install Kubernetes on the Control Plane
-    ansible-playbook -i ${var.project_root}/self-managed-k8s-karpenter/ansible/inventory.ini -u ec2-user \
-      --private-key ${var.project_root}/self-managed-k8s-karpenter/awsid_rsa \
-      ${var.project_root}/self-managed-k8s-karpenter/ansible/playbooks/install-k8s-master.yaml
-    
-    # 🏗️ Install Kubernetes on Worker Nodes
-    ansible-playbook -i ${var.project_root}/self-managed-k8s-karpenter/ansible/inventory.ini -u ec2-user \
-      --private-key ${var.project_root}/self-managed-k8s-karpenter/awsid_rsa \
-      --ssh-extra-args='-o ProxyCommand="ssh -i ${var.project_root}/self-managed-k8s-karpenter/awsid_rsa -W %h:%p -q ec2-user@${aws_instance.control_plane.public_ip}"' \
-      ${var.project_root}/self-managed-k8s-karpenter/ansible/playbooks/install-k8s-workers.yaml
-
-    # 🚀 Deploy Karpenter
-    echo "⏳ Running Ansible to deploy Karpenter..."
     ansible-playbook -i ${var.project_root}/self-managed-k8s-karpenter/ansible/inventory.ini \
       -u ec2-user --private-key ${var.project_root}/self-managed-k8s-karpenter/awsid_rsa \
       ${var.project_root}/self-managed-k8s-karpenter/ansible/playbooks/deploy-karpenter.yaml
@@ -140,7 +168,6 @@ resource "null_resource" "ansible_provisioning" {
   }
 
   depends_on = [
-    null_resource.generate_ansible_inventory,
-    null_resource.wait_for_worker_ssh
+    null_resource.wait_for_cluster_ready
   ]
 }
