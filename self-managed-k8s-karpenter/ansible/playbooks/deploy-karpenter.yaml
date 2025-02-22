@@ -61,13 +61,3 @@
         owner: ec2-user
         group: ec2-user
         mode: '0644'
-
-    - name: Apply Karpenter NodeTemplate
-      command: kubectl apply -f /home/ec2-user/self-managed-k8s-karpenter/karpenter/nodetemplate.yaml
-      environment:
-        KUBECONFIG: /home/ec2-user/.kube/config
-
-    - name: Apply Karpenter Provisioner
-      command: kubectl apply -f /home/ec2-user/self-managed-k8s-karpenter/karpenter/provisioner.yaml
-      environment:
-        KUBECONFIG: /home/ec2-user/.kube/config
