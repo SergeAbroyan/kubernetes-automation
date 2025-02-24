@@ -16,70 +16,94 @@
       args:
         executable: /bin/bash
 
-    ### ✅ 2. Create Karpenter Directory ###
-    - name: Create Karpenter directory
+    ### ✅ 2. Ensure Karpenter Namespace Exists (FIXED) ###
+    - name: Check if Karpenter namespace exists
+      shell: kubectl get namespace karpenter --ignore-not-found
+      register: namespace_check
+      changed_when: false
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+
+    - name: Create Karpenter namespace if missing
+      command: kubectl create namespace karpenter
+      when: namespace_check.stdout == ""
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+
+    ### ✅ 3. Cleanup Any Stuck Helm Releases ###
+    - name: Check if Karpenter Helm release exists
+      shell: helm list -n karpenter | grep karpenter || true
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+      register: helm_release_status
+      ignore_errors: yes
+
+    - name: Debug Helm Release Status
+      debug:
+        msg: "{{ helm_release_status.stdout_lines }}"
+
+    - name: Unlock Helm and delete any stuck Karpenter release
+      shell: |
+        helm rollback karpenter -n karpenter || true
+        helm delete karpenter -n karpenter || true
+      when: "'karpenter' in helm_release_status.stdout"
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+      ignore_errors: yes
+
+    - name: Ensure no pending Helm operations
+      shell: helm list -n karpenter
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+      register: helm_check
+      retries: 5
+      delay: 10
+      until: "'karpenter' not in helm_check.stdout"
+
+    - name: Add Karpenter Helm Repository
+      shell: helm repo add karpenter https://charts.karpenter.sh
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+      ignore_errors: yes
+
+    - name: Update Helm Repositories
+      shell: helm repo update
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+      ignore_errors: yes
+
+    - name: Install Karpenter using Helm
+      shell: >
+        helm upgrade --install karpenter karpenter/karpenter
+        --namespace karpenter
+        --set serviceAccount.annotations."eks\\.amazonaws\\.com/role-arn"="arn:aws:iam::{{ lookup('env', 'AWS_ACCOUNT_ID') }}:role/KarpenterRole"
+        --set controller.clusterName="self-managed-k8s"
+        --set defaultProvisioner.create=false
+        --set installCRDs=true
+        --timeout=300s
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+
+
+    - name: Wait for Karpenter CRDs
+      shell: kubectl wait --for=condition=Established --timeout=180s crd/provisioners.karpenter.sh
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+      retries: 5
+      delay: 10
+      register: wait_crd
+      until: wait_crd.rc == 0
+
+
+    - name: Ensure NodeTemplate directory exists
       file:
         path: /home/ec2-user/self-managed-k8s-karpenter/karpenter
         state: directory
-        owner: ec2-user
-        group: ec2-user
         mode: '0755'
 
-    ### ✅ 3. Add & Update Helm Repositories ###
-    - name: Add Karpenter Helm repo
-      shell: helm repo list | grep -q "karpenter" || helm repo add karpenter https://charts.karpenter.sh
-      environment:
-        KUBECONFIG: /home/ec2-user/.kube/config
-
-    - name: Update Helm Repositories
-      command: helm repo update
-      environment:
-        KUBECONFIG: /home/ec2-user/.kube/config
-
-    ### ✅ 4. Ensure Karpenter Namespace Exists ###
-    - name: Create karpenter namespace
-      shell: kubectl create namespace karpenter --dry-run=client -o yaml | kubectl apply -f -
-      environment:
-        KUBECONFIG: /home/ec2-user/.kube/config
-
-    ### ✅ 5. Install Karpenter Using Helm ###
-    - name: Install Karpenter using Helm
-      command: >
-        helm upgrade --install karpenter karpenter/karpenter
-        --namespace karpenter
-        --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="arn:aws:iam::{{ lookup('env', 'AWS_ACCOUNT_ID') }}:role/KarpenterRole"
-        --set controller.clusterName="self-managed-k8s"
-        --set defaultProvisioner.create=false
-        --wait
-      environment:
-        KUBECONFIG: /home/ec2-user/.kube/config
-
-    ### ✅ 6. Ensure Karpenter CRDs Are Installed ###
-    - name: Check if Karpenter CRDs are installed
-      shell: kubectl get crds | grep 'karpenter'
-      register: karpenter_crd_check
-      ignore_errors: true
-      environment:
-        KUBECONFIG: /home/ec2-user/.kube/config
-
-    - name: Apply Karpenter CRDs (if missing)
-      shell: |
-        kubectl apply -f https://raw.githubusercontent.com/aws/karpenter/main/pkg/apis/crds/karpenter.sh_provisioners.yaml
-        kubectl apply -f https://raw.githubusercontent.com/aws/karpenter/main/pkg/apis/crds/karpenter.k8s.aws_awsnodetemplates.yaml
-      when: karpenter_crd_check.rc != 0
-      environment:
-        KUBECONFIG: /home/ec2-user/.kube/config
-
-    ### ✅ 7. Wait for Karpenter Pods to be Ready ###
-    - name: Wait for Karpenter pods to be ready
-      shell: kubectl wait --namespace karpenter --for=condition=Ready pods --all --timeout=180s
-      environment:
-        KUBECONFIG: /home/ec2-user/.kube/config
-      ignore_errors: true
-
-    ### ✅ 8. Create NodeTemplate ###
-    - name: Write NodeTemplate YAML to Master Node
+    - name: Create NodeTemplate file
       copy:
+        dest: /home/ec2-user/self-managed-k8s-karpenter/karpenter/nodetemplate.yaml
         content: |
           apiVersion: karpenter.k8s.aws/v1alpha5
           kind: AWSNodeTemplate
@@ -92,19 +116,18 @@
               karpenter.sh/discovery: "self-managed-k8s"
             instanceProfile: "karpenter-instance-profile"
             amiFamily: AL2
-        dest: /home/ec2-user/self-managed-k8s-karpenter/karpenter/nodetemplate.yaml
-        owner: ec2-user
-        group: ec2-user
-        mode: '0644'
+        mode: "0644"
 
-    - name: Apply Karpenter NodeTemplate
+    - name: Apply NodeTemplate
       command: kubectl apply -f /home/ec2-user/self-managed-k8s-karpenter/karpenter/nodetemplate.yaml
       environment:
         KUBECONFIG: /home/ec2-user/.kube/config
 
-    ### ✅ 9. Create Provisioner ###
-    - name: Write Provisioner YAML to Master Node
+
+    ### ✅ 7. Apply Karpenter Provisioner ###
+    - name: Apply Provisioner
       copy:
+        dest: /home/ec2-user/self-managed-k8s-karpenter/karpenter/provisioner.yaml
         content: |
           apiVersion: karpenter.sh/v1alpha5
           kind: Provisioner
@@ -123,18 +146,32 @@
             consolidation:
               enabled: true
             ttlSecondsAfterEmpty: 30
-            nodeSelector:
-              kubernetes.io/role: worker
-            tolerations:
-              - key: node-role.kubernetes.io/control-plane
-                operator: Exists
-                effect: NoSchedule
-        dest: /home/ec2-user/self-managed-k8s-karpenter/karpenter/provisioner.yaml
-        owner: ec2-user
-        group: ec2-user
-        mode: '0644'
+        mode: "0644"
 
-    - name: Apply Karpenter Provisioner
+    - name: Apply Provisioner
       command: kubectl apply -f /home/ec2-user/self-managed-k8s-karpenter/karpenter/provisioner.yaml
       environment:
         KUBECONFIG: /home/ec2-user/.kube/config
+
+    ### ✅ 8. Debug Karpenter Pods & Logs ###
+    - name: List Karpenter Pods
+      shell: kubectl get pods -n karpenter -o wide
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+      register: pod_status
+      ignore_errors: yes
+
+    - name: Print Karpenter Pod Status
+      debug:
+        msg: "{{ pod_status.stdout_lines }}"
+
+    - name: Capture Karpenter Logs if Failing
+      shell: kubectl logs -l app.kubernetes.io/name=karpenter -n karpenter
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+      register: karpenter_logs
+      ignore_errors: yes
+
+    - name: Print Karpenter Logs
+      debug:
+        msg: "{{ karpenter_logs.stdout_lines }}"
