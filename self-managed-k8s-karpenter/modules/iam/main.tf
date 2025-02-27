@@ -41,7 +41,8 @@ resource "aws_iam_role" "k8s_worker_nodes" {
     Statement = [{
       Effect = "Allow"
       Principal = { Service = "ec2.amazonaws.com" }
-      Action = "sts:AssumeRole"
+      Action =  "sts:AssumeRole"
+        
     }]
   })
 
@@ -63,6 +64,12 @@ resource "aws_iam_role_policy_attachment" "worker_node_policies" {
   role       = aws_iam_role.k8s_worker_nodes.name
   policy_arn = each.value
 }
+
+resource "aws_iam_role_policy_attachment" "worker_node_cloudwatch" {
+  role       = aws_iam_role.k8s_worker_nodes.name
+  policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+}
+
 
 ### 🚀 KARPENTER IAM ROLE ###
 resource "aws_iam_role" "karpenter" {
@@ -86,27 +93,36 @@ resource "aws_iam_policy" "karpenter_controller_policy" {
   description = "IAM policy for Karpenter Controller"
   policy      = jsonencode({
     Version = "2012-10-17",
-    Statement = [{
-      Effect = "Allow",
-      Action = [
-        "ec2:RunInstances",
-        "ec2:CreateLaunchTemplate",
-        "ec2:DescribeInstances",
-        "ec2:DescribeInstanceTypes",
-        "ec2:TerminateInstances",
-        "ec2:DescribeLaunchTemplates",
-        "ec2:DeleteLaunchTemplate",
-        "ec2:CreateTags",
-        "iam:PassRole",
-        "ssm:GetParameter",
-        "autoscaling:DescribeAutoScalingGroups",
-        "autoscaling:SetDesiredCapacity",
-        "autoscaling:UpdateAutoScalingGroup"
-      ],
-      Resource = "*"
-    }]
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "ec2:RunInstances",
+          "ec2:CreateLaunchTemplate",
+          "ec2:DescribeInstances",
+          "ec2:DescribeInstanceTypes",
+          "ec2:TerminateInstances",
+          "ec2:DescribeLaunchTemplates",
+          "ec2:DeleteLaunchTemplate",
+          "ec2:CreateTags",
+          "ec2:DescribeSubnets",
+          "ec2:DescribeSecurityGroups",
+          "ec2:DescribeVpcs",
+          "ec2:DescribeInstanceStatus",
+          "ec2:DescribeImages",
+          "iam:PassRole",
+          "ssm:GetParameter",
+          "autoscaling:DescribeAutoScalingGroups",
+          "autoscaling:SetDesiredCapacity",
+          "autoscaling:UpdateAutoScalingGroup",
+          "iam:GetInstanceProfile"
+        ],
+        Resource = "*"
+      }
+    ]
   })
 }
+
 
 # ✅ Attach Karpenter Policy (Dynamically Attached)
 resource "aws_iam_role_policy_attachment" "karpenter_controller_attachment" {

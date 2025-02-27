@@ -4,7 +4,62 @@
   become: yes
   tasks:
 
-    ### ✅ 1. Install Required Packages ###
+
+
+    - name: Ensure overlay and br_netfilter are loaded on boot
+      lineinfile:
+        path: /etc/modules-load.d/k8s.conf
+        line: "{{ item }}"
+        create: yes
+      with_items:
+        - overlay
+        - br_netfilter
+
+    - name: Ensure correct permissions for kernel modules file
+      file:
+        path: /etc/modules-load.d/k8s.conf
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Load kernel modules immediately
+      shell: |
+        modprobe overlay
+        modprobe br_netfilter
+
+
+    - name: Ensure correct ownership of kernel module config file
+      file:
+        path: /etc/modules-load.d/k8s.conf
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Load modules immediately
+      command: modprobe overlay && modprobe br_netfilter
+
+    - name: Ensure sysctl settings for Kubernetes networking
+      lineinfile:
+        path: /etc/sysctl.d/k8s.conf
+        line: "{{ item }}"
+        create: yes
+      with_items:
+        - "net.bridge.bridge-nf-call-iptables = 1"
+        - "net.bridge.bridge-nf-call-ip6tables = 1"
+        - "net.ipv4.ip_forward = 1"
+
+    - name: Ensure correct permissions for sysctl config file
+      file:
+        path: /etc/sysctl.d/k8s.conf
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Apply sysctl settings
+      command: sysctl --system
+
+
+    ### ✅ 2. Install Docker ###
     - name: Enable Docker on Amazon Linux 2
       command: amazon-linux-extras enable docker
 
@@ -14,11 +69,12 @@
         state: present
 
     - name: Start and Enable Docker Service
-      service:
+      systemd:
         name: docker
         state: started
         enabled: yes
 
+    ### ✅ 3. Install Kubernetes ###
     - name: Add Kubernetes YUM Repository
       copy:
         dest: /etc/yum.repos.d/kubernetes.repo
@@ -45,44 +101,36 @@
         enabled: yes
         state: started
 
-    ### ✅ 2. Initialize Kubernetes Control Plane ###
+    ### ✅ 4. Initialize Kubernetes Control Plane ###
     - name: Initialize Kubernetes Control Plane
-      command: kubeadm init --pod-network-cidr=192.168.0.0/16
+      command: kubeadm init --control-plane-endpoint "{{ ansible_host }}" --pod-network-cidr=192.168.0.0/16
       args:
         creates: /etc/kubernetes/admin.conf
 
     - name: Configure kubectl for ec2-user
-      block:
-        - name: Create .kube directory
-          file:
-            path: /home/ec2-user/.kube
-            state: directory
-            owner: ec2-user
-            group: ec2-user
-            mode: '0755'
+      file:
+        path: /home/ec2-user/.kube
+        state: directory
+        owner: ec2-user
+        group: ec2-user
+        mode: '0755'
 
-        - name: Copy admin.conf to user kubeconfig
-          copy:
-            src: /etc/kubernetes/admin.conf
-            dest: /home/ec2-user/.kube/config
-            remote_src: yes
-            owner: ec2-user
-            group: ec2-user
-            mode: '0644'
+    - name: Copy admin.conf to user kubeconfig
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/ec2-user/.kube/config
+        remote_src: yes
+        owner: ec2-user
+        group: ec2-user
+        mode: '0644'
 
-    - name: Set KUBECONFIG environment variable for ec2-user
-      lineinfile:
-        path: /home/ec2-user/.bashrc
-        line: "export KUBECONFIG=/home/ec2-user/.kube/config"
-        create: yes
-
-    ### ✅ 3. Install Calico Network Plugin ###
+    ### ✅ 5. Install Calico Network Plugin ###
     - name: Install Calico Network Plugin
       command: kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
       environment:
         KUBECONFIG: /home/ec2-user/.kube/config
 
-    ### ✅ 4. Generate and Save Worker Node Join Command ###
+    ### ✅ 6. Generate Worker Node Join Command ###
     - name: Generate Worker Node Join Command
       command: kubeadm token create --print-join-command
       register: kubeadm_join_command
@@ -92,25 +140,3 @@
         content: "{{ kubeadm_join_command.stdout }}"
         dest: /var/lib/kubeadm_join.sh
         mode: '0644'
-
-    ### ✅ 5. Install Helm ###
-    - name: Install Git (Required for Helm)
-      yum:
-        name: git
-        state: present
-
-    - name: Install Helm
-      shell: |
-        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-        mv /usr/local/bin/helm /usr/bin/helm
-      args:
-        creates: /usr/bin/helm
-
-    - name: Ensure Helm is available in PATH
-      lineinfile:
-        path: /etc/profile
-        line: "export PATH=$PATH:/usr/bin"
-        create: yes
-
-    - name: Reload Shell Profile
-      shell: source /etc/profile

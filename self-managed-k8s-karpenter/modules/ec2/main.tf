@@ -11,9 +11,19 @@ provider "aws" {
   region = var.aws_region
 }
 
+data "aws_ami" "latest_amazon_linux" {
+  most_recent = true
+  owners      = ["amazon"]
+  filter {
+    name   = "name"
+    values = ["amzn2-ami-kernel-5.*-hvm-*-x86_64-gp2"]
+  }
+}
+
+
 ### 🚀 Create EC2 Instances: Control Plane & Worker Nodes ###
 resource "aws_instance" "control_plane" {
-  ami                    = var.ami_id
+  ami                    = data.aws_ami.latest_amazon_linux.id
   instance_type          = var.control_plane_instance_type
   key_name               = var.key_pair_name
   subnet_id              = var.public_subnet_id
@@ -25,7 +35,7 @@ resource "aws_instance" "control_plane" {
 
 resource "aws_instance" "worker_nodes" {
   count                  = var.worker_node_count
-  ami                    = var.ami_id
+  ami                    = data.aws_ami.latest_amazon_linux.id
   instance_type          = var.worker_node_instance_type
   key_name               = var.key_pair_name
   subnet_id              = var.private_subnet_id

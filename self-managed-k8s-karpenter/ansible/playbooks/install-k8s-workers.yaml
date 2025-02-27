@@ -4,59 +4,18 @@
   become: yes
   tasks:
 
-    ### ✅ 1. Install and Enable Docker ###
-    - name: Install Docker
-      yum:
-        name: docker
-        state: present
+    ### ✅ 1. Wait for Kubernetes API Server to be Ready ###
+    - name: Wait for Kubernetes API Server
+      uri:
+        url: "https://{{ groups['master'][0] }}:6443/healthz"
+        method: GET
+        validate_certs: no
+      register: k8s_api_status
+      until: k8s_api_status.status == 200
+      retries: 30
+      delay: 10
 
-    - name: Enable and Start Docker
-      systemd:
-        name: docker
-        enabled: yes
-        state: started
-
-    ### ✅ 2. Add Kubernetes Repo and Install Kubernetes ###
-    - name: Add Kubernetes YUM Repository
-      copy:
-        dest: /etc/yum.repos.d/kubernetes.repo
-        content: |
-          [kubernetes]
-          name=Kubernetes
-          baseurl=https://pkgs.k8s.io/core:/stable:/v1.29/rpm/
-          enabled=1
-          gpgcheck=1
-          repo_gpgcheck=1
-          gpgkey=https://pkgs.k8s.io/core:/stable:/v1.29/rpm/repodata/repomd.xml.key
-
-    - name: Install Kubernetes Packages
-      yum:
-        name:
-          - kubelet
-          - kubeadm
-          - kubectl
-        state: present
-
-    - name: Enable and Start Kubelet
-      systemd:
-        name: kubelet
-        enabled: yes
-        state: started
-
-    ### ✅ 3. Ensure the Join Command Exists on the Master ###
-    - name: Check if Join Command Exists on Master
-      stat:
-        path: /var/lib/kubeadm_join.sh
-      register: join_script
-      delegate_to: "{{ groups['master'][0] }}"
-      run_once: true
-
-    - name: Fail if Join Script Does Not Exist
-      fail:
-        msg: "The kubeadm join script is missing on the master node!"
-      when: not join_script.stat.exists
-
-    ### ✅ 4. Fetch and Copy the Join Command ###
+    ### ✅ 2. Join Worker Nodes to the Cluster ###
     - name: Fetch Join Command from Master
       slurp:
         src: /var/lib/kubeadm_join.sh
@@ -70,8 +29,14 @@
         dest: /var/lib/kubeadm_join.sh
         mode: '0755'
 
-    ### ✅ 5. Join Worker Nodes to the Cluster ###
     - name: Join Worker Node to Kubernetes Cluster
       command: bash /var/lib/kubeadm_join.sh
       args:
         creates: /etc/kubernetes/kubelet.conf
+
+    ### ✅ 3. Restart Kubelet ###
+    - name: Restart kubelet
+      systemd:
+        name: kubelet
+        state: restarted
+        enabled: yes

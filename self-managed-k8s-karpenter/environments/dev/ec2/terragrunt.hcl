@@ -47,7 +47,6 @@ locals {
 
 inputs = {
   aws_region                  = "us-east-1"
-  ami_id                      = "ami-04681163a08179f28" # Change this to the correct Kubernetes AMI
   control_plane_instance_type = "t3.medium"
   worker_node_instance_type   = "t3.medium"
   worker_node_count           = 1

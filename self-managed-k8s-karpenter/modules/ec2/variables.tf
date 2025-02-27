@@ -5,10 +5,6 @@ variable "aws_region" {
   type        = string
 }
 
-variable "ami_id" {
-  description = "AMI ID for Kubernetes nodes"
-  type        = string
-}
 
 variable "control_plane_instance_type" {
   description = "Instance type for control plane node"
