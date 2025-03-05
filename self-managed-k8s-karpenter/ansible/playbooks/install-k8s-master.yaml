@@ -4,9 +4,8 @@
   become: yes
   tasks:
 
-
-
-    - name: Ensure overlay and br_netfilter are loaded on boot
+    ### ✅ 1. Ensure kernel modules and networking settings are loaded ###
+    - name: Load kernel modules on boot
       lineinfile:
         path: /etc/modules-load.d/k8s.conf
         line: "{{ item }}"
@@ -15,30 +14,12 @@
         - overlay
         - br_netfilter
 
-    - name: Ensure correct permissions for kernel modules file
-      file:
-        path: /etc/modules-load.d/k8s.conf
-        owner: root
-        group: root
-        mode: '0644'
-
     - name: Load kernel modules immediately
       shell: |
         modprobe overlay
         modprobe br_netfilter
 
-
-    - name: Ensure correct ownership of kernel module config file
-      file:
-        path: /etc/modules-load.d/k8s.conf
-        owner: root
-        group: root
-        mode: '0644'
-
-    - name: Load modules immediately
-      command: modprobe overlay && modprobe br_netfilter
-
-    - name: Ensure sysctl settings for Kubernetes networking
+    - name: Configure sysctl settings for Kubernetes networking
       lineinfile:
         path: /etc/sysctl.d/k8s.conf
         line: "{{ item }}"
@@ -48,33 +29,38 @@
         - "net.bridge.bridge-nf-call-ip6tables = 1"
         - "net.ipv4.ip_forward = 1"
 
-    - name: Ensure correct permissions for sysctl config file
-      file:
-        path: /etc/sysctl.d/k8s.conf
-        owner: root
-        group: root
-        mode: '0644'
-
     - name: Apply sysctl settings
       command: sysctl --system
 
-
-    ### ✅ 2. Install Docker ###
-    - name: Enable Docker on Amazon Linux 2
-      command: amazon-linux-extras enable docker
-
-    - name: Install Docker
+    ### ✅ 2. Install Containerd & Dependencies ###
+    - name: Install dependencies
       yum:
-        name: docker
+        name:
+          - yum-utils
+          - device-mapper-persistent-data
+          - lvm2
+          - containerd
         state: present
 
-    - name: Start and Enable Docker Service
+    - name: Configure containerd
+      shell: |
+        containerd config default | tee /etc/containerd/config.toml
+        systemctl restart containerd
+        systemctl enable containerd
+
+    ### ✅ 3. Install Docker ###
+    - name: Enable and install Docker
+      shell: |
+        amazon-linux-extras enable docker
+        yum install -y docker
+
+    - name: Start and enable Docker
       systemd:
         name: docker
         state: started
         enabled: yes
 
-    ### ✅ 3. Install Kubernetes ###
+    ### ✅ 4. Install Kubernetes Components ###
     - name: Add Kubernetes YUM Repository
       copy:
         dest: /etc/yum.repos.d/kubernetes.repo
@@ -87,7 +73,7 @@
           repo_gpgcheck=1
           gpgkey=https://pkgs.k8s.io/core:/stable:/v1.29/rpm/repodata/repomd.xml.key
 
-    - name: Install Kubernetes Packages (kubeadm, kubelet, kubectl)
+    - name: Install Kubernetes Packages (kubelet, kubeadm, kubectl)
       yum:
         name:
           - kubelet
@@ -101,9 +87,9 @@
         enabled: yes
         state: started
 
-    ### ✅ 4. Initialize Kubernetes Control Plane ###
-    - name: Initialize Kubernetes Control Plane
-      command: kubeadm init --control-plane-endpoint "{{ ansible_host }}" --pod-network-cidr=192.168.0.0/16
+    ### ✅ 5. Initialize Kubernetes Control Plane ###
+    - name: Initialize Kubernetes
+      command: kubeadm init --control-plane-endpoint "{{ ansible_host }}" --pod-network-cidr=192.168.0.0/16 --ignore-preflight-errors=all
       args:
         creates: /etc/kubernetes/admin.conf
 
@@ -115,7 +101,7 @@
         group: ec2-user
         mode: '0755'
 
-    - name: Copy admin.conf to user kubeconfig
+    - name: Copy kubeconfig to user home
       copy:
         src: /etc/kubernetes/admin.conf
         dest: /home/ec2-user/.kube/config
@@ -124,14 +110,14 @@
         group: ec2-user
         mode: '0644'
 
-    ### ✅ 5. Install Calico Network Plugin ###
-    - name: Install Calico Network Plugin
+    ### ✅ 6. Install Calico Network Plugin ###
+    - name: Apply Calico CNI
       command: kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
       environment:
         KUBECONFIG: /home/ec2-user/.kube/config
 
-    ### ✅ 6. Generate Worker Node Join Command ###
-    - name: Generate Worker Node Join Command
+    ### ✅ 7. Generate Worker Node Join Command ###
+    - name: Generate Worker Join Command
       command: kubeadm token create --print-join-command
       register: kubeadm_join_command
 

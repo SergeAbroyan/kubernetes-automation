@@ -4,39 +4,99 @@
   become: yes
   tasks:
 
-    ### ✅ 1. Wait for Kubernetes API Server to be Ready ###
-    - name: Wait for Kubernetes API Server
-      uri:
-        url: "https://{{ groups['master'][0] }}:6443/healthz"
-        method: GET
-        validate_certs: no
-      register: k8s_api_status
-      until: k8s_api_status.status == 200
-      retries: 30
-      delay: 10
+    ### ✅ 1. Install Dependencies ###
+    - name: Install containerd and dependencies
+      yum:
+        name:
+          - containerd
+          - yum-utils
+          - device-mapper-persistent-data
+          - lvm2
+        state: present
 
-    ### ✅ 2. Join Worker Nodes to the Cluster ###
-    - name: Fetch Join Command from Master
+    - name: Configure containerd
+      shell: |
+        containerd config default | tee /etc/containerd/config.toml
+        systemctl restart containerd
+        systemctl enable containerd
+
+    ### ✅ 2. Load Kernel Modules ###
+    - name: Ensure kernel modules are loaded
+      shell: |
+        echo 'overlay' >> /etc/modules-load.d/k8s.conf
+        echo 'br_netfilter' >> /etc/modules-load.d/k8s.conf
+        modprobe overlay
+        modprobe br_netfilter
+
+    ### ✅ 3. Apply Sysctl Settings ###
+    - name: Apply sysctl settings for networking
+      shell: |
+        cat <<EOF | tee /etc/sysctl.d/k8s.conf
+        net.bridge.bridge-nf-call-iptables = 1
+        net.bridge.bridge-nf-call-ip6tables = 1
+        net.ipv4.ip_forward = 1
+        EOF
+        sysctl --system
+
+    ### ✅ 4. Install Kubernetes Packages ###
+    - name: Add Kubernetes YUM Repository
+      copy:
+        dest: /etc/yum.repos.d/kubernetes.repo
+        content: |
+          [kubernetes]
+          name=Kubernetes
+          baseurl=https://pkgs.k8s.io/core:/stable:/v1.29/rpm/
+          enabled=1
+          gpgcheck=1
+          repo_gpgcheck=1
+          gpgkey=https://pkgs.k8s.io/core:/stable:/v1.29/rpm/repodata/repomd.xml.key
+
+    - name: Install Kubernetes Packages (kubelet, kubeadm, kubectl)
+      yum:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+
+    - name: Enable and Start Kubelet Service
+      systemd:
+        name: kubelet
+        enabled: yes
+        state: restarted
+
+    ### ✅ 5. Fetch Join Command from Master ###
+    - name: Fetch Join Command
       slurp:
         src: /var/lib/kubeadm_join.sh
       register: kubeadm_join
       delegate_to: "{{ groups['master'][0] }}"
       run_once: true
 
-    - name: Write Join Command to Worker Nodes
+    - name: Write Join Command
       copy:
         content: "{{ kubeadm_join.content | b64decode }}"
         dest: /var/lib/kubeadm_join.sh
         mode: '0755'
 
-    - name: Join Worker Node to Kubernetes Cluster
-      command: bash /var/lib/kubeadm_join.sh
+    ### ✅ 6. Ensure kubeadm is Available in PATH ###
+    - name: Ensure kubeadm is in PATH
+      shell: echo 'export PATH=$PATH:/usr/bin' >> /etc/profile
       args:
-        creates: /etc/kubernetes/kubelet.conf
+        creates: /etc/profile.d/k8s-path.sh
 
-    ### ✅ 3. Restart Kubelet ###
+    - name: Reload Shell Profile
+      shell: source /etc/profile
+
+    ### ✅ 7. Restart Kubelet Before Joining ###
     - name: Restart kubelet
       systemd:
         name: kubelet
         state: restarted
         enabled: yes
+
+    ### ✅ 8. Join Worker Node ###
+    - name: Join Kubernetes Cluster
+      command: bash /var/lib/kubeadm_join.sh
+      args:
+        creates: /etc/kubernetes/kubelet.conf

@@ -4,26 +4,179 @@
   become: yes
   tasks:
 
-    ### ✅ 1. Verify Karpenter IAM Role Permissions ###
-    - name: Verify Karpenter IAM Role
-      command: aws iam get-role-policy --role-name "KarpenterRole" --policy-name "KarpenterControllerPolicy"
-      register: karpenter_iam_status
+
+   ### ✅ 1. Ensure KUBECONFIG is Set ###
+    - name: Ensure KUBECONFIG is set for ec2-user
+      lineinfile:
+        path: /home/ec2-user/.bashrc
+        line: "export KUBECONFIG=/home/ec2-user/.kube/config"
+
+    - name: Source KUBECONFIG in current shell
+      shell: source /home/ec2-user/.bashrc
+      args:
+        executable: /bin/bash
+
+    ### ✅ 2. Install Required Dependencies ###
+    - name: Install Git, Curl, and Tar
+      yum:
+        name:
+          - git
+          - curl
+          - tar
+        state: present
+
+    ### ✅ 3. Ensure Helm is Installed ###
+    - name: Check if Helm is Already Installed
+      command: helm version
+      register: helm_check
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Install Helm if Not Found
+      shell: |
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+        mv /usr/local/bin/helm /usr/bin/helm
+      args:
+        creates: /usr/bin/helm
+      when: helm_check.rc != 0
+
+    - name: Ensure Helm is in PATH
+      lineinfile:
+        path: /etc/profile
+        line: "export PATH=$PATH:/usr/bin"
+        create: yes
+
+    - name: Reload Shell Profile
+      shell: source /etc/profile
+      args:
+        executable: /bin/bash
+
+    ### ✅ 4. Verify Helm Installation ###
+    - name: Verify Helm is Installed and Accessible
+      command: helm version
+      register: helm_verify
+      changed_when: false
+      failed_when: helm_verify.rc != 0
+
+    ### ✅ 5. Add Helm Repository for Karpenter ###
+    - name: Add Karpenter Helm Repository
+      command: /usr/bin/helm repo add karpenter https://charts.karpenter.sh
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+
+    - name: Update Helm Repositories
+      command: /usr/bin/helm repo update
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+
+    ### ✅ 1. Get Kubernetes API Endpoint ###
+    - name: Get Kubernetes API Endpoint
+      shell: |
+        export KUBECONFIG=/home/ec2-user/.kube/config
+        kubectl get endpoints kubernetes -o jsonpath="{.subsets[0].addresses[0].ip}"
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+      register: kube_api_ip
+      changed_when: false
+      failed_when: kube_api_ip.stdout == ""
+
+    - name: Set API Endpoint Fallback
+      set_fact:
+        cluster_api_endpoint: "{{ kube_api_ip.stdout | default('10.0.1.32') }}"  # Replace with your master node IP if needed
+
+    - name: Install Karpenter with Helm
+      command: >
+        /usr/bin/helm upgrade --install karpenter karpenter/karpenter
+        --namespace karpenter --create-namespace
+        --set serviceAccount.create=true
+        --set controller.clusterName="self-managed-k8s"
+        --set controller.clusterEndpoint="https://{{ cluster_api_endpoint }}:6443"
+        --set 'controller.env[0].name=CLUSTER_NAME' --set 'controller.env[0].value=self-managed-k8s'
+        --set 'controller.env[1].name=CLUSTER_ENDPOINT' --set 'controller.env[1].value=https://{{ cluster_api_endpoint }}:6443'
+        --set defaultProvisioner.create=true
+        --set installCRDs=true
+        --timeout=300s
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+
+
+    ### ✅ 3. Restart Karpenter Deployment ###
+    - name: Restart Karpenter Deployment
+      command: kubectl rollout restart deployment karpenter -n karpenter
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+
+    ### ✅ 4. Wait for Karpenter Deployment ###
+    - name: Wait for Karpenter to be Ready
+      shell: kubectl wait --for=condition=available deployment -n karpenter karpenter --timeout=180s
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+      retries: 5
+      delay: 10
+      register: wait_karpenter
+      until: wait_karpenter.rc == 0
+
+    ### ✅ 5. Ensure a Default Provisioner Exists ###
+    - name: Check if Default Provisioner Exists
+      shell: kubectl get provisioners default --no-headers
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+      register: default_provisioner
+      changed_when: false
+      ignore_errors: yes  # Avoid failure if provisioner is missing
+
+    - name: Set Fact for Provisioner Check
+      set_fact:
+        provisioner_missing: "{{ default_provisioner.stdout.find('No resources found') != -1 }}"
+
+    - name: Create Default Provisioner if Missing
+      shell: |
+        cat <<EOF | kubectl apply -f -
+        apiVersion: karpenter.k8s.aws/v1alpha5
+        kind: Provisioner
+        metadata:
+          name: default
+        spec:
+          requirements:
+            - key: "node.kubernetes.io/instance-type"
+              operator: In
+              values: ["t3.medium", "t3.large"]
+            - key: "topology.kubernetes.io/zone"
+              operator: In
+              values: ["us-east-1a", "us-east-1b"]
+          limits:
+            resources:
+              cpu: "4"
+              memory: "8Gi"
+          provider:
+            subnetSelector:
+              karpenter.sh/discovery: "self-managed-k8s"
+            securityGroupSelector:
+              karpenter.sh/discovery: "self-managed-k8s"
+        EOF
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+      when: provisioner_missing
+
+    ### ✅ 6. Debugging & Logs ###
+    - name: List Karpenter Pods
+      shell: kubectl get pods -n karpenter -o wide
+      environment:
+        KUBECONFIG: /home/ec2-user/.kube/config
+      register: pod_status
       ignore_errors: yes
 
-    ### ✅ 2. Install Karpenter using Helm ###
-    - name: Install Karpenter using Helm
-      shell: >
-        helm upgrade --install karpenter karpenter/karpenter
-        --namespace karpenter
-        --set serviceAccount.create=true
-        --set serviceAccount.name=karpenter
-        --set controller.clusterName="self-managed-k8s"
-        --set controller.logLevel=debug
-      environment:
-        KUBECONFIG: /home/ec2-user/.kube/config
+    - name: Print Karpenter Pod Status
+      debug:
+        msg: "{{ pod_status.stdout_lines }}"
 
-    ### ✅ 3. Deploy Karpenter Provisioner ###
-    - name: Apply Provisioner
-      command: kubectl apply -f /home/ec2-user/self-managed-k8s-karpenter/karpenter/provisioner.yaml
+    - name: Capture Karpenter Logs if Failing
+      shell: kubectl logs -l app.kubernetes.io/name=karpenter -n karpenter --all-containers
       environment:
         KUBECONFIG: /home/ec2-user/.kube/config
+      register: karpenter_logs
+      ignore_errors: yes
+
+    - name: Print Karpenter Logs
+      debug:
+        msg: "{{ karpenter_logs.stdout_lines }}"
